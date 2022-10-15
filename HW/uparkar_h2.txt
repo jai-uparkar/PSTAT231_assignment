@@ -1,0 +1,2 @@
+https://github.com/jai-uparkar/PSTAT231_assignment/blob/main/HW2/homework-2.Rmd
+https://github.com/jai-uparkar/PSTAT231_assignment/blob/main/homework-2.html
