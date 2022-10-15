@@ -1,0 +1,214 @@
+---
+title: "Homework 2"
+author: "PSTAT 131/231"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: show
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE)
+library(knitr)
+library(rsample)
+library(corrplot)
+library(ggplot2)
+library(tidyverse)
+library(tidymodels)
+library(ggthemes)
+library(recipes)
+library(parsnip)
+library(workflows)
+library(dplyr)
+library(yardstick)
+
+
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+
+## indents are for indenting r code as formatted text
+## They may need to be adjusted depending on your OS
+# if your output looks odd, increase or decrease indent
+indent1 = '    '
+indent2 = '        '
+set.seed(3435)
+```
+
+## Linear Regression
+
+For this lab, we will be working with a data set from the UCI (University of California, Irvine) Machine Learning repository ([see website here](http://archive.ics.uci.edu/ml/datasets/Abalone)). The full data set consists of $4,177$ observations of abalone in Tasmania. (Fun fact: [Tasmania](https://en.wikipedia.org/wiki/Tasmania "Tasmania") supplies about $25\%$ of the yearly world abalone harvest.)
+
+![*Fig 1. Inside of an abalone shell.*](https://cdn.shopify.com/s/files/1/1198/8002/products/1d89434927bffb6fd1786c19c2d921fb_2000x_652a2391-5a0a-4f10-966c-f759dc08635c_1024x1024.jpg?v=1582320404){width="152"}
+
+The age of an abalone is typically determined by cutting the shell open and counting the number of rings with a microscope. The purpose of this data set is to determine whether abalone age (**number of rings + 1.5**) can be accurately predicted using other, easier-to-obtain information about the abalone.
+
+The full abalone data set is located in the `\data` subdirectory. Read it into *R* using `read_csv()`. Take a moment to read through the codebook (`abalone_codebook.txt`) and familiarize yourself with the variable definitions.
+
+Make sure you load the `tidyverse` and `tidymodels`!
+
+### Question 1
+
+Your goal is to predict abalone age, which is calculated as the number of rings plus 1.5. Notice there currently is no `age` variable in the data set. Add `age` to the data set.
+
+Assess and describe the distribution of `age`.
+
+```{r abalone1, results='hide'}
+abalone_df<- read.csv('data/abalone.csv')
+abalone_df <- abalone_df %>% 
+  mutate(age = rings + 1.5)
+
+hist(abalone_df$age, main = 'Distribution of Abalone Age', xlab = "Abalone Age")
+
+```
+The abalone age distribution is skewed to the right (high number of younger abalone) and is uni modal. The most common abalone age is between 10 and 12 years. The model ranges from approximately 4 years to 30 years old but most of the abalone's age are concentrated between the years of 6 and 14. 
+
+### Question 2
+
+Split the abalone data into a training set and a testing set. Use stratified sampling. You should decide on appropriate percentages for splitting the data.
+
+*Remember that you'll need to set a seed at the beginning of the document to reproduce your results.*
+```{r abalone2, results='hide'}
+abalone_split <- initial_split(abalone_df, prop = 0.7,
+                                strata = age)
+abalone_train <- training(abalone_split)
+abalone_test <- testing(abalone_split)
+```
+
+### Question 3
+
+Using the **training** data, create a recipe predicting the outcome variable, `age`, with all other predictor variables. Note that you should not include `rings` to predict `age`. Explain why you shouldn't use `rings` to predict `age`.
+
+Steps for your recipe:
+
+1.  dummy code any categorical predictors
+
+2.  create interactions between
+
+    -   `type` and `shucked_weight`,
+    -   `longest_shell` and `diameter`,
+    -   `shucked_weight` and `shell_weight`
+
+3.  center all predictors, and
+
+4.  scale all predictors.
+
+You'll need to investigate the `tidymodels` documentation to find the appropriate step functions to use.
+```{r abalone3, results='hide'}
+
+abalone_recipe <- recipe(age~., data = abalone_train) %>% 
+  step_rm(rings) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact(terms = ~ starts_with("type"):shucked_weight +
+                  longest_shell:diameter + 
+                  shucked_weight:shell_weight) %>% 
+  step_normalize(all_predictors())
+
+```
+
+### Question 4
+Create and store a linear regression object using the `"lm"` engine.
+```{r abalone4, results='hide'}
+lm_model <- linear_reg() %>% 
+  set_engine("lm")
+```
+
+
+### Question 5
+
+Now:
+
+1.  set up an empty workflow,
+2.  add the model you created in Question 4, and
+3.  add the recipe that you created in Question 3.
+```{r abalone5, results='hide'}
+abalone_workflow <- workflow() %>% 
+  add_model(lm_model)  %>% 
+  add_recipe(abalone_recipe)
+  
+abalone_fit <- fit(abalone_workflow, abalone_train)
+```
+
+### Question 6
+
+Use your `fit()` object to predict the age of a hypothetical female abalone with longest_shell = 0.50, diameter = 0.10, height = 0.30, whole_weight = 4, shucked_weight = 1, viscera_weight = 2, shell_weight = 1.
+```{r abalone6, results='hide'}
+hypo_female<- data.frame(type = "F", longest_shell = 0.50, diameter = 0.10, height = 0.30, 
+                         whole_weight = 4, shucked_weight = 1, viscera_weight = 2, shell_weight = 1, rings = 5)
+
+predict(abalone_fit, new_data = hypo_female)
+```
+This specific abalone is predicted to be 22.7 years old. 
+
+### Question 7
+
+Now you want to assess your model's performance. To do this, use the `yardstick` package:
+
+1.  Create a metric set that includes *R^2^*, RMSE (root mean squared error), and MAE (mean absolute error).
+2.  Use `predict()` and `bind_cols()` to create a tibble of your model's predicted values from the **training data** along with the actual observed ages (these are needed to assess your model's performance).
+3.  Finally, apply your metric set to the tibble, report the results, and interpret the *R^2^* value.
+
+```{r abalone7, results='hide'}
+abalone_predict <- predict(abalone_fit, abalone_train)
+abalone_train_res <- bind_cols(abalone_predict, abalone_train %>% select(age))
+
+abalone_metrics <- metric_set(rmse, rsq, mae)
+abalone_metrics(abalone_train_res, truth = age, 
+                estimate = .pred)
+```
+The $R^2$ of this model is pretty low with only 55.8 % percent of the variation in abalone's age was explained by the model. After looking at this value it is highly likely that the relationship between age and the other predictors are nonlinear. 
+
+### Required for 231 Students
+
+In lecture, we presented the general bias-variance tradeoff, which takes the form:
+
+$$
+E[(y_0 - \hat{f}(x_0))^2]=Var(\hat{f}(x_0))+[Bias(\hat{f}(x_0))]^2+Var(\epsilon)
+$$
+
+where the underlying model $Y=f(X)+\epsilon$ satisfies the following:
+
+- $\epsilon$ is a zero-mean random noise term and $X$ is non-random (all randomness in $Y$ comes from $\epsilon$);
+- $(x_0, y_0)$ represents a test observation, independent of the training set, drawn from the same model;
+- $\hat{f}(.)$ is the estimate of $f$ obtained from the training set.
+
+#### Question 8
+
+Which term(s) in the bias-variance tradeoff above represent the reproducible error? Which term(s) represent the irreducible error?
+
+Reproducible Error: $Var(\hat{f}(x_0))+[Bias(\hat{f}(x_0))]^2$
+
+Irreducible error: $\epsilon$
+
+#### Question 9
+
+Using the bias-variance tradeoff above, demonstrate that the expected test error is always at least as large as the irreducible error.
+
+Even if the reducible error is reduced to zero you are still left with the irreducible error in the bias variance trade off. 
+$$ E[(y_0 - \hat{f}(x_0))^2]=Var(\hat{f}(x_0))+[Bias(\hat{f}(x_0))]^2+Var(\epsilon) $$
+$$ E[(y_0 - \hat{f}(x_0))^2]= 0 + 0 +Var(\epsilon) $$
+
+#### Question 10
+
+Prove the bias-variance tradeoff.
+Hints:
+- use the definition of $Bias(\hat{f}(x_0))=E[\hat{f}(x_0)]-f(x_0)$;
+- reorganize terms in the expected test error by adding and subtracting $E[\hat{f}(x_0)]$
+
+$$ E[(y_0 - \hat{f}(\textbf{x}_0))^2]=Var(\hat{f}(\textbf{x}_0))+[Bias(\hat{f}(\textbf{x}_0)]^{2}+Var(\epsilon) $$
+$$E[(y_0 - \hat{f}(\textbf{x}_0))^2]=E[(f(x) + \epsilon - \hat{f}(\textbf{x}_0))^2] $$
+$$E[(f(\textbf{x}_0)-\hat{f}(\textbf{x}_0))^2] =  E[\epsilon^2]+2E[(f(\textbf{x}_0)-\hat{f}(\textbf{x}_0))\epsilon]
+$$
+$$
+0 =E[(f(\textbf{x}_0)+E[\hat{f}(\textbf{x}_0)]-E[\hat{f}(\textbf{x}_0)]-\hat{f}(\textbf{x}_0))^2]+Var(\epsilon)
+$$
+$$ 0 =E[(E[\hat{f}(\textbf{x}_0)]-f(\textbf{x}_0))^{2}]+E[(\hat{f}(\textbf{x}_0)-E[\hat{f}(\textbf{x}_0)])^2]-2E[(f(\textbf{x}_0)-E[\hat{f}(\textbf{x}_0)])](E[\hat{f}(\textbf{x}_0)]-E[\hat{f}(\textbf{x}_0)]) + Var(\epsilon)
+$$
+$$ 0 =(E[\hat{f}(\textbf{x}_0)]-f(\textbf{x}_0))^2+E[(\hat{f}(\textbf{x}_0)-E[\hat{f}(\textbf{x}_0)])^2]+Var(\epsilon) $$
+$$E[(y_0 - \hat{f}(\textbf{x}_0))^2]=bias(\hat{f}(\textbf{x}_0))^2+Var(\hat{f}(\textbf{x}_0))+Var(\epsilon) $$
+
+
